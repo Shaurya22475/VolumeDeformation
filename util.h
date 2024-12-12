@@ -20,10 +20,10 @@ void draw_points(igl::opengl::glfw::Viewer& viewer, const MatrixXd& V);
 MatrixXd createCircle(float radius, int numberPoints);
 
 
-
+MatrixXd createSphere(float radius, int numLatitude, int numLongitude);
 
 RowVector3d get_MousePositionCoord(igl::opengl::glfw::Viewer& viewer, MatrixXd& V, MatrixXi& F);
 int get_ClosestVertex(MatrixXd& V, float x, float y);
-
+void Deform(const std::vector<std::vector<float>> &weights, MatrixXd &vertices, const MatrixXd &cage);
 
 void createRectangleMouse(MatrixXd& Vertices, MatrixXi& Faces, float size);

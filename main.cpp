@@ -1,79 +1,83 @@
-	#include "Util.h"
-	#include <ctime>
-	#include <chrono>
+#include "Util.h"
 
-	MatrixXd cageVertices;
-	MatrixXi cageFaces;
+#include <ctime>
+#include <chrono>
 
-	MatrixXd meshVertices;
-	MatrixXi meshFaces;
 
-	MatrixXd Vmouse;
-	MatrixXi Fmouse;
+MatrixXd cageVertices;
+MatrixXi cageFaces;
 
-	bool parallel = false;
+MatrixXd meshVertices;
+MatrixXi meshFaces;
 
-	std::vector<std::vector<float>> weights;
+MatrixXd mouseView;
+MatrixXi mousePoints;
 
-	bool click = false;
-	int clickedVertex;
+std::vector<std::vector<float>> weights;
 
-	void updateMesh(const std::vector<std::vector<float>> &weights, MatrixXd &vertices, const MatrixXd &cage){
-		for (int i = 0; i < vertices.rows(); i++){
-			RowVectorXd point(3);
-			point << 0,0,0;
-			for (int j = 0; j < weights[i].size(); j++){
-				point(0) += weights[i][j]*cage(j,0);
-				point(1) += weights[i][j]*cage(j,1);
-			}
-			vertices.row(i) = point;
-		}
-	}
+bool click = false;
+int clickedVertex;
 
-	bool mouse_move(igl::opengl::glfw::Viewer& viewer, int mouse_x, int mouse_y){
-		if (click)
-			{
-				Vector3d Pos;
-				Pos = get_MousePositionCoord(viewer, Vmouse, Fmouse);
-				cageVertices.row(clickedVertex) = Pos;
-				viewer.data(0).clear();
-				viewer.data().clear();
-				viewer.data(0).add_points(cageVertices, Eigen::RowVector3d(1, 0, 0));
-				draw_curve(viewer, cageVertices);
-				// Drawing mesh
-				updateMesh(weights, meshVertices, cageVertices);
-				viewer.data(0).add_points(meshVertices, Eigen::RowVector3d(1, 0, 0));
-				draw_curve(viewer, meshVertices);
-			}
-			return true;
-	};
 
-	bool mouse_down(igl::opengl::glfw::Viewer& viewer, int button, int modifier){
-			Vector3d Pos;
-			Pos = get_MousePositionCoord(viewer, Vmouse, Fmouse);
-			clickedVertex = get_ClosestVertex(cageVertices ,Pos(0), Pos(1));
-			if(clickedVertex ==-1)
-				return false;
-			click = true;
-			return false;
-		};
 
-	bool mouse_up(igl::opengl::glfw::Viewer& viewer, int button, int modifier){
-		if(click){
-			updateMesh(weights, meshVertices, cageVertices);
-			viewer.data(0).add_points(meshVertices, Eigen::RowVector3d(1, 0, 0));
-			draw_curve(viewer, meshVertices);
-		}
+bool onMousemove(igl::opengl::glfw::Viewer &viewer, int mouse_x, int mouse_y) {
+    if (click) {
+        // Update clicked vertex position
+        Vector3d Pos = get_MousePositionCoord(viewer, mouseView, mousePoints);
+        cageVertices.row(clickedVertex) = Pos;
 
-		click = false;
-		return false;
-	};
+        // Clear and redraw cage vertices
+        viewer.data(0).clear();
+        viewer.data(0).add_points(cageVertices, Eigen::RowVector3d(1, 0, 0));
+        draw_curve(viewer, cageVertices);
 
+        // Deform the mesh based on cage movement
+        Deform(weights, meshVertices, cageVertices);
+
+        // Prepare colors based on the clicked vertex's influence
+        Eigen::MatrixXd colors(meshVertices.rows(), 3);
+        for (int i = 0; i < meshVertices.rows(); ++i) {
+            float influence = weights[i][clickedVertex];
+            colors.row(i) = Eigen::RowVector3d(std::pow((influence),0.35), std::pow((influence),0.35), std::pow((influence),0.35)); // Example: red to green gradient
+            // colors.row(i) = Eigen::RowVector3d(0, 0, std::min(1.0,pow(influence,0.35))); // Example: red to green gradient
+        }
+
+        // Visualize mesh vertices with gradient colors
+        viewer.data(0).add_points(meshVertices, colors);
+
+        // Optionally redraw the mesh edges (curve)
+        draw_curve(viewer, meshVertices);
+    }
+    return true;
+}
+
+
+bool onMouseDown(igl::opengl::glfw::Viewer &viewer, int button, int modifier) {
+    Vector3d Pos;
+    Pos = get_MousePositionCoord(viewer, mouseView, mousePoints);
+    clickedVertex = get_ClosestVertex(cageVertices, Pos(0), Pos(1));
+    if (clickedVertex == -1)
+        return false;
+    click = true;
+    return false;
+}
+
+bool onMouseup(igl::opengl::glfw::Viewer &viewer, int button, int modifier) {
+    if (click) {
+        Deform(weights, meshVertices, cageVertices);
+        viewer.data(0).add_points(meshVertices, Eigen::RowVector3d(1, 0, 0));
+        draw_curve(viewer, meshVertices);
+    }
+
+    click = false;
+    return false;
+}
 
 int main(int argc, char *argv[])
 {
-	createRectangleMouse(Vmouse, Fmouse, 20.0);
+	createRectangleMouse(mouseView, mousePoints, 20.0);
 	cageVertices = createCircle(5, 10);
+	
 	meshVertices = createCircle(3, 30);
 	
 	
@@ -84,7 +88,7 @@ int main(int argc, char *argv[])
     G.Flood_Fill(0, 0); 
     for (int x = 0; x < G.getsize(); x++) { 
         for (int y = 0; y < G.getsize(); y++) {
-            if (G.getGridValue(x,y) == UNTYPED) { 
+            if (G.getGridValue(x,y) == UNVISITED) { 
                 G.setGridValue(x,y, INTERIOR);  
                 G.addInternalPoint({x, y});
             }
@@ -101,7 +105,9 @@ int main(int argc, char *argv[])
 	
 	weights = G.get_weights();
 
-	igl::opengl::glfw::Viewer viewer; 
+	igl::opengl::glfw::Viewer viewer;
+	// viewer.core().background_color = Eigen::RowVector4f(0.0f, 0.0f, 0.0f, 1.0f);
+
 
 	draw_points(viewer, cageVertices); 
 	draw_curve(viewer, cageVertices);
@@ -110,9 +116,9 @@ int main(int argc, char *argv[])
 	viewer.core(0).align_camera_center(cageVertices, cageFaces);
 
 
-	viewer.callback_mouse_move = &mouse_move;
-	viewer.callback_mouse_down = &mouse_down;
-	viewer.callback_mouse_up = &mouse_up;
+	viewer.callback_mouse_move = &onMousemove;
+	viewer.callback_mouse_down = &onMouseDown;
+	viewer.callback_mouse_up = &onMouseup;
 
 	viewer.launch(); 	
 }

@@ -1,30 +1,23 @@
-#include <igl/opengl/glfw/Viewer.h>
-#include <iostream>
-#include <cmath>
 #include <vector>
 #include <utility>
 #include <Eigen/Core>
+
+#include <igl/opengl/glfw/Viewer.h>
+#include <iostream>
+#include <cmath>
+
 #include <stack>
 
 using namespace Eigen;
 
-#define UNTYPED 0
-#define BOUNDARY 1
-#define INTERIOR 2
-#define EXTERIOR 3
-
-const float xMin = -10;
-const float yMin = -10;
-const float xMax = 10;
-const float yMax = 10;
-
+#include "constants.h"
 
 class Grid
 {
   private:
     int size;
     float step; 
-    Eigen::MatrixXi G; // Grid size*size. G(x,y) represents a Region: UNTYPED, BOUNDARY, INTERIOR, EXTERIOR
+    Eigen::MatrixXi G; // Grid size*size. G(x,y) represents a Region: UNVISITED, BOUNDARY, INTERIOR, EXTERIOR
     Eigen::MatrixXd cageV; // Cage vertices
     Eigen::MatrixXd meshV; // Mesh vertices
 
@@ -36,7 +29,7 @@ class Grid
   public:
     Grid(const int &s) {
         size = std::pow(2, s);
-        step = (xMax - xMin) / (size - 1);
+        step = (xRight - xLeft) / (size - 1);
         G = Eigen::MatrixXi::Zero(size, size);
     }
 
@@ -71,14 +64,14 @@ class Grid
 
         for (int i = 0; i < cage.rows(); i++) {
             int x0, y0, x1, y1;
-            x0 = std::round((cage.row(i)(0) - xMin) / step);
-            y0 = std::round((cage.row(i)(1) - yMin) / step);
+            x0 = std::round((cage.row(i)(0) - xLeft) / step);
+            y0 = std::round((cage.row(i)(1) - yLeft) / step);
             if (i < cage.rows() - 1) {
-                x1 = std::round((cage.row(i + 1)(0) - xMin) / step);
-                y1 = std::round((cage.row(i + 1)(1) - yMin) / step);
+                x1 = std::round((cage.row(i + 1)(0) - xLeft) / step);
+                y1 = std::round((cage.row(i + 1)(1) - yLeft) / step);
             } else {
-                x1 = std::round((cage.row(0)(0) - xMin) / step);
-                y1 = std::round((cage.row(0)(1) - yMin) / step);
+                x1 = std::round((cage.row(0)(0) - xLeft) / step);
+                y1 = std::round((cage.row(0)(1) - yLeft) / step);
             }
             RasterizeLine(x0, y0, x1, y1, i);
         }
@@ -105,8 +98,8 @@ class Grid
 
             const float x = meshV.row(i)(0);
             const float y = meshV.row(i)(1);
-            const int gridX = convertToGrid(x, xMin);
-            const int gridY = convertToGrid(y, yMin);
+            const int gridX = convertToGrid(x, xLeft);
+            const int gridY = convertToGrid(y, yLeft);
 
             for (int j = 0; j < numHarmonics; ++j) {
                 temp.emplace_back(Harmonics[j](gridX, gridY));
@@ -165,33 +158,64 @@ class Grid
             }
         }
     }
-
-
     
+        void RasterizeLineLinear(int x0, int y0, int x1, int y1, int cageIdx) {
+        Harmonics[cageIdx](x0, y0) = 1;
 
-    void Fill_Grid_Regions() {
-        Flood_Fill(0, 0);
-        for (int x = 0; x < size; x++) {
-            for (int y = 0; y < size; y++) {
-                if (G(x, y) == UNTYPED) {
-                    G(x, y) = INTERIOR;
-                    internalPoints.push_back({x,y});
-                }
+        int dx = abs(x1 - x0);
+        int sx = x0 < x1 ? 1 : -1;
+        int dy = abs(y1 - y0);
+        int sy = y0 < y1 ? 1 : -1;
+        int err = (dx > dy ? dx : -dy) / 2;
+        int e2;
+
+        std::vector<std::pair<int, int>> pts;
+
+        while (1) {
+            G(x0, y0) = BOUNDARY;
+            if (x0 == x1 && y0 == y1) break;
+            e2 = err;
+            if (e2 > -dx) {
+                err -= dy;
+                x0 += sx;
+            }
+            if (e2 < dy) {
+                err += dx;
+                y0 += sy;
+            }
+
+            pts.push_back(std::pair<int, int>(x0, y0));
+        }
+
+        // Linear Interpolation
+        int numPoints = pts.size();
+        for (int j = 0; j < numPoints; j++) {
+            float distance = static_cast<float>(j) / (numPoints - 1); // Normalize distance to [0, 1]
+            float weight = 1.0f - distance; // Linearly decrease weight
+
+            Harmonics[cageIdx](pts[j].first, pts[j].second) += weight;
+
+            if (cageIdx < Harmonics.size() - 1) {
+                Harmonics[cageIdx + 1](pts[j].first, pts[j].second) += (1.0f - weight);
+            } else {
+                Harmonics[0](pts[j].first, pts[j].second) += (1.0f - weight);
             }
         }
     }
 
-    void updateMesh(const MatrixXd &cage){
-		for (int i = 0; i < meshV.rows(); i++){
-			RowVectorXd point(3);
-			point << 0,0,0;
-			for (int j = 0; j < cage.rows(); j++){
-				point(0) += weights[i][j]*cage(j,0);
-				point(1) += weights[i][j]*cage(j,1);
-			}
-			meshV.row(i) = point;
-		}
-	}
+    void updateMesh(const MatrixXd &cageVertices) {
+        for (int vertexIdx = 0; vertexIdx < meshV.rows(); ++vertexIdx) {
+            RowVectorXd updatedPoint(3);
+            updatedPoint.setZero(); // Initialize to zero
+
+            for (int cageIdx = 0; cageIdx < cageVertices.rows(); ++cageIdx) {
+                updatedPoint(0) += weights[vertexIdx][cageIdx] * cageVertices(cageIdx, 0);
+                updatedPoint(1) += weights[vertexIdx][cageIdx] * cageVertices(cageIdx, 1);
+            }
+
+            meshV.row(vertexIdx) = updatedPoint;
+        }
+    }
 
     void LaplacianSmooth(float tolerance = 0.00001, int harmonicIndex = 0) {
         float maxDifference = 1.0f; 
@@ -255,7 +279,7 @@ class Grid
             stack.pop();
 
     
-            if (x < 0 || x >= size || y < 0 || y >= size || G(x, y) != UNTYPED) {
+            if (x < 0 || x >= size || y < 0 || y >= size || G(x, y) != UNVISITED) {
                 continue;
             }
             G(x, y) = EXTERIOR;
@@ -268,6 +292,14 @@ class Grid
         }
     }
 
+    void visualize_weights() {
+        for (int i = 0; i < weights.size(); i++){
+			for (int j = 0; j < weights[i].size(); j++){
+				std::cout<< weights[i][j] << " ";
+			}
+			std::cout<<"\n";
+		}
+    }
     
 
     void Print_Grid() {
